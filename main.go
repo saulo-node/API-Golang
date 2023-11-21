@@ -1,51 +1,93 @@
 package main
 
 import (
+	"database/sql"
+	"encoding/json"
+	"fmt"
 	"net/http"
 
-	"github.com/gin-gonic/gin"
+	_ "github.com/go-sql-driver/mysql"
 )
 
-type Verse struct {
-	ID       string `json:"id"`
-	Verse    string `json:"verse"`
-	Quantity uint   `json:"quantity"`
-}
+var db *sql.DB
 
-var Verses = []Verse{
-	{"1", "God loves the world", 3},
-	{"2", "He comes with the clouds", 5},
-}
-
-func main() {
-	router := gin.Default()
-	router.GET("/", handleRoot)
-	router.GET("/:verse", handleRequest)
-	router.POST("/:verse/*path", handleRequest)
-	router.Run("localhost:8080")
-}
-
-func handleRoot(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{
-		"message": "Welcome to the root path!",
-	})
-}
-
-func handleRequest(c *gin.Context) {
-	verse := c.Param("verse")
-	path := c.Param("path")
-
-	if verse == "" {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Verse parameter is required",
-		})
+func initDB() {
+	var err error
+	db, err = sql.Open("mysql", "root:1234@tcp(localhost:3306)/usersdb")
+	if err != nil {
+		fmt.Println("Erro ao abrir o banco de dados:", err)
 		return
 	}
 
-	// Handle both GET and POST requests with the dynamic parameter and wildcard path
-	// You can add logic here to retrieve or manipulate the data based on the parameters
+	err = db.Ping()
+	if err != nil {
+		fmt.Println("Erro ao conectar ao banco de dados:", err)
+		return
+	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"message": "Request for verse: " + verse + ", path: " + path,
-	})
+	fmt.Println("Conectado ao banco de dados!")
+}
+
+type User struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Age  uint   `json:"age"`
+}
+
+func getUser(w http.ResponseWriter, r *http.Request) {
+	rows, err := db.Query("SELECT * FROM users")
+	if err != nil {
+		http.Error(w, "Erro ao consultar o banco de dados", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var users []User
+
+	for rows.Next() {
+		var user User
+		err := rows.Scan(&user.ID, &user.Name, &user.Age)
+		if err != nil {
+			http.Error(w, "Erro ao escanear as linhas", http.StatusInternalServerError)
+			return
+		}
+		users = append(users, user)
+	}
+
+	data, err := json.Marshal(users)
+	if err != nil {
+		http.Error(w, "Erro com os usuários", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(data)
+}
+
+func createUser(w http.ResponseWriter, r *http.Request) {
+	var newUser User
+	decoder := json.NewDecoder(r.Body)
+	err := decoder.Decode(&newUser)
+	if err != nil {
+		http.Error(w, "Erro na decodificação", http.StatusBadRequest)
+		return
+	}
+
+	_, err = db.Exec("INSERT INTO users (id, name, age) VALUES (?, ?, ?)", newUser.ID, newUser.Name, newUser.Age)
+	if err != nil {
+		http.Error(w, "Erro ao inserir no banco de dados", http.StatusInternalServerError)
+		return
+	}
+
+	fmt.Println("Novo usuário criado: ", newUser)
+	w.WriteHeader(http.StatusCreated)
+}
+
+func main() {
+	initDB()
+
+	http.HandleFunc("/", getUser)
+	http.HandleFunc("/create", createUser)
+	http.ListenAndServe(":8000", nil)
 }
